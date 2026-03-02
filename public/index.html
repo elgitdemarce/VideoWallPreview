@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Simulador VideoWall</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        :root { --blue: #0099e5; --green: #28a745; --bg: #000; }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: #0a0a0a;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            padding: 15px;
+            text-align: center;
+            width: 100%;
+            background: #151515;
+            border-bottom: 1px solid #333;
+            z-index: 100;
+        }
+
+        .controls { display: flex; gap: 10px; justify-content: center; margin-top: 10px; }
+        
+        button {
+            padding: 8px 16px;
+            border-radius: 4px;
+            border: 1px solid #444;
+            background: #222;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .btn-export { background: #1a5a3a; border-color: #28a745; }
+        .btn-danger { background: #631a1a; }
+
+        #wall-capture-area {
+            background: black;
+            padding: 40px 0;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            overflow: hidden; /* Evita sangrado de píxeles */
+        }
+
+        /* CAMBIO A FLEXBOX PARA CONTROL TOTAL */
+        #wall-container {
+            display: flex;
+            flex-wrap: wrap;
+            width: 100vw;
+            background: black;
+            line-height: 0;
+        }
+
+        .screen-wrapper {
+            display: flex;
+            position: relative;
+            background: black;
+            /* Forzamos el ancho exacto: 1/15 del total */
+            width: calc(100% / 15); 
+            /* El truco: margen negativo de 0.1px para solapar y eliminar líneas */
+            margin-right: -0.1px; 
+            margin-bottom: -0.1px;
+        }
+
+        .row-1 { flex-direction: column; }
+        .row-2 { flex-direction: column-reverse; }
+
+        .screen-label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 0 4px;
+            font-size: 10px;
+            height: 22px;
+            background: black;
+            overflow: hidden;
+            line-height: normal;
+        }
+
+        .screen-id { font-weight: bold; font-size: 11px; }
+        .file-name { color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-grow: 1; }
+
+        .btn-del {
+            background: #ff4d4d;
+            color: white;
+            border: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            font-size: 9px;
+            cursor: pointer;
+            display: none;
+        }
+
+        .screen-box {
+            aspect-ratio: 16 / 9;
+            background: #111;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            width: 100%; /* Asegura que ocupe todo el wrapper */
+        }
+
+        .screen-box img {
+            display: block;
+            width: 101%; /* Ligeramente más grande para morder bordes */
+            height: 101%;
+            object-fit: cover;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            image-rendering: -webkit-optimize-contrast;
+        }
+
+        #wall-capture-area:fullscreen {
+            padding: 0;
+            display: flex;
+            align-items: center;
+            background: black;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h2 style="margin:0">Simulador de Wall Werthein</h2>
+        <div class="controls">
+            <button onclick="toggleFS()">📺 Pantalla Completa</button>
+            <button class="btn-export" onclick="exportWall()">📸 Exportar Imagen</button>
+            <button class="btn-danger" onclick="clearAll()">🗑️ Limpiar Todo</button>
+        </div>
+    </header>
+
+    <div id="wall-capture-area">
+        <div id="wall-container"></div>
+    </div>
+
+    <input type="file" id="file-input" accept="image/*" style="display: none;" multiple>
+
+    <script>
+        const wall = document.getElementById('wall-container');
+        const fileInput = document.getElementById('file-input');
+        let activeId = null;
+
+        const layout = [
+            "A01", "A02", "A03", "A04", "A05", "A06", "A07", "B08", "B09", "B10", "B11", "B12", "B13", "B14", "B15",
+            "A16", "A17", "A18", "A19", "A20", "A21", "A22", "B23", "B24", "B25", "B26", "B27", "B28", "B29", "B30"
+        ];
+
+        layout.forEach((id, index) => {
+            const wrapper = document.createElement('div');
+            wrapper.className = `screen-wrapper ${index < 15 ? 'row-1' : 'row-2'}`;
+            const color = id.startsWith('A') ? 'var(--blue)' : 'var(--green)';
+
+            wrapper.innerHTML = `
+                <div class="screen-label">
+                    <span class="screen-id" style="color: ${color}">${id}</span>
+                    <span class="file-name" id="name-${id}">vacío</span>
+                    <button class="btn-del" id="del-${id}" onclick="event.stopPropagation(); resetScreen('${id}')">×</button>
+                </div>
+                <div class="screen-box" id="box-${id}"></div>
+            `;
+            
+            const box = wrapper.querySelector('.screen-box');
+            box.onclick = () => { activeId = id; fileInput.click(); };
+            
+            box.ondragover = (e) => { e.preventDefault(); };
+            box.ondrop = (e) => {
+                e.preventDefault();
+                const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+                files.forEach((file, i) => {
+                    const targetIndex = index + i;
+                    if (targetIndex < layout.length) loadImage(file, layout[targetIndex]);
+                });
+            };
+            wall.appendChild(wrapper);
+        });
+
+        fileInput.onchange = (e) => {
+            const files = Array.from(e.target.files);
+            const startIndex = layout.indexOf(activeId);
+            files.forEach((file, i) => {
+                if (startIndex + i < layout.length) loadImage(file, layout[startIndex + i]);
+            });
+            fileInput.value = "";
+        };
+
+        function loadImage(file, id) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const box = document.getElementById(`box-${id}`);
+                box.innerHTML = `<img src="${e.target.result}">`;
+                document.getElementById(`name-${id}`).innerText = file.name;
+                document.getElementById(`del-${id}`).style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function resetScreen(id) {
+            document.getElementById(`box-${id}`).innerHTML = '';
+            document.getElementById(`name-${id}`).innerText = "vacío";
+            document.getElementById(`del-${id}`).style.display = 'none';
+        }
+
+        function clearAll() {
+            if(confirm("¿Limpiar todo?")) layout.forEach(id => resetScreen(id));
+        }
+
+        function toggleFS() {
+            const area = document.getElementById('wall-capture-area');
+            if (!document.fullscreenElement) area.requestFullscreen();
+            else document.exitFullscreen();
+        }
+
+        function exportWall() {
+            const captureArea = document.getElementById('wall-capture-area');
+            const btn = document.querySelector('.btn-export');
+            btn.innerText = "⌛...";
+            
+            // Forzamos al área de captura a ignorar el redondeo del scroll
+            window.scrollTo(0,0);
+
+
+            html2canvas(captureArea, {
+                backgroundColor: "#000000",
+                scale: 2,
+                useCORS: true,
+                logging: false,
+                width: captureArea.offsetWidth,
+                height: captureArea.offsetHeight                
+            }).then(canvas => {
+                const link = document.createElement('a');
+                link.download = 'Videowall-preview.jpg';
+                link.href = canvas.toDataURL("image/jpeg", 1.0);
+                link.click();
+                btn.innerText = "📸 Exportar Imagen";
+            });
+        }
+    </script>
+</body>
+</html>
